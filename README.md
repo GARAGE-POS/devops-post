@@ -111,33 +111,32 @@ You will have access to:
 ## Contract Terms
 
 ### Duration & Timeline
-- **Contract length**: 1 week (40 hours total)
+- **Contract length**: 1 month (60 hours total)
 - **Start date**: Immediate availability required
 - **Completion deadline**: 7 days from start
-- **Training sessions**: 2-3 sessions during the week (flexible scheduling)
+- **Training sessions**: 2-3 sessions during the month (flexible scheduling)
 
 ### Availability Requirements
-- **Overlap with our team**: Some availability during business hours (EST/PST)
+- **Overlap with our team**: Some availability during business hours (Saudi Arabia Time)
 - **Emergency contact**: Available for critical deployment issues during setup week
 - **Handover meeting**: Final session to review all deliverables
 
 ### Communication
-- **Daily check-ins** via Slack/Teams
-- **Progress updates** every 2 days
+- **Daily check-ins** via Slack
+- **Progress updates** dialy
 - **Final presentation** of completed infrastructure and training materials
 
 ## Compensation
 
 ### Project Rate
-- **Fixed project fee**: $3,000-5,000 (negotiable based on experience)
-- **Hourly rate alternative**: $75-125/hour for 40 hours
+- **Fixed project fee**: To be agreed on
+- **Hourly rate alternative**: To be agreed on
 - **Training component**: Included in project fee
 - **Emergency support**: Additional hourly rate during setup week
 
 ### Payment Terms
-- **50% upfront** upon contract signing
-- **50% upon completion** and successful handover
-- **Azure infrastructure costs** covered separately by client
+- **The project will be divied into milestones and payment will be done upon delivery**
+
 
 ## How to Apply
 
