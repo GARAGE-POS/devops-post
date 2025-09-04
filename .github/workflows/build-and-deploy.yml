@@ -1,0 +1,205 @@
+# GitHub Actions workflow for building and deploying Karage API
+# with comprehensive versioning support
+
+name: Build and Deploy
+
+on:
+  push:
+    branches: [ staging, production ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+        - staging
+        - production
+      force_deploy:
+        description: 'Force deployment even if tests fail'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: karageregistry.azurecr.io
+  IMAGE_NAME: karage-api
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      image-digest: ${{ steps.build.outputs.digest }}
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Azure Container Registry
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: karageregistry
+        password: ${{ secrets.ACR_PASSWORD }}
+        
+    - name: Calculate version
+      id: version
+      run: |
+        # Extract version from Directory.Build.props
+        VERSION_MAJOR=$(grep -oP '<VersionMajor>\K[^<]+' Directory.Build.props)
+        VERSION_MINOR=$(grep -oP '<VersionMinor>\K[^<]+' Directory.Build.props)
+        VERSION_PATCH=$(grep -oP '<VersionPatch>\K[^<]+' Directory.Build.props)
+        BASE_VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}"
+        
+        # Build number
+        BUILD_NUMBER=${{ github.run_number }}
+        
+        # Git commit hash
+        GIT_COMMIT=$(git rev-parse --short HEAD)
+        
+        # Build timestamp for consistency with Directory.Build.props
+        BUILD_TIMESTAMP=$(date -u +"%Y%m%d.%H%M%S")
+        
+        # Determine version suffix and environment based on branch
+        if [[ "${{ github.ref }}" == "refs/heads/production" ]]; then
+          VERSION_SUFFIX=""
+          FULL_VERSION="${BASE_VERSION}"
+          ASPNETCORE_ENVIRONMENT="Production"
+        elif [[ "${{ github.ref }}" == "refs/heads/staging" ]]; then
+          VERSION_SUFFIX="rc.${BUILD_TIMESTAMP}"
+          FULL_VERSION="${BASE_VERSION}-${VERSION_SUFFIX}"
+          ASPNETCORE_ENVIRONMENT="Staging"
+        else
+          echo "❌ This workflow only supports staging and production branches"
+          exit 1
+        fi
+        
+        echo "version=${FULL_VERSION}" >> $GITHUB_OUTPUT
+        echo "build-number=${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+        echo "git-commit=${GIT_COMMIT}" >> $GITHUB_OUTPUT
+        echo "environment=${ASPNETCORE_ENVIRONMENT}" >> $GITHUB_OUTPUT
+        echo "branch-name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+        echo "build-timestamp=${BUILD_TIMESTAMP}" >> $GITHUB_OUTPUT
+        
+        echo "📋 Version Information:"
+        echo "  Base Version: ${BASE_VERSION}"
+        echo "  Full Version: ${FULL_VERSION}"
+        echo "  Build Number: ${BUILD_NUMBER}"
+        echo "  Build Timestamp: ${BUILD_TIMESTAMP}"
+        echo "  Git Commit: ${GIT_COMMIT}"
+        echo "  Environment: ${ASPNETCORE_ENVIRONMENT}"
+        echo "  Branch: ${{ github.ref_name }}"
+        
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=raw,value=${{ steps.version.outputs.version }}
+          type=raw,value=latest,enable=${{ github.ref == 'refs/heads/production' }}
+          
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: src/Karage.Web/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          BUILD_CONFIGURATION=Release
+          BUILD_NUMBER=${{ steps.version.outputs.build-number }}
+          GIT_COMMIT_HASH=${{ steps.version.outputs.git-commit }}
+          BUILD_SOURCEBRANCHNAME=${{ steps.version.outputs.branch-name }}
+          ASPNETCORE_ENVIRONMENT=${{ steps.version.outputs.environment }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: |
+      (github.ref == 'refs/heads/staging' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+    environment: staging
+    
+    steps:
+    - name: Log in to Azure
+      uses: azure/login@v2
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+        
+    - name: Configure ACR Access for Container Apps
+      run: |
+        # Configure registry credentials
+        az containerapp registry set \
+          --name karage-staging \
+          --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+          --server ${{ env.REGISTRY }} \
+          --username karageregistry \
+          --password $(az acr credential show --name karageregistry --query "passwords[0].value" -o tsv)
+
+    - name: Deploy to Azure Container Apps (Staging)
+      run: |
+        az containerapp update \
+          --name karage-staging \
+          --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.version }} \
+          --set-env-vars \
+            ASPNETCORE_ENVIRONMENT=Staging \
+            BUILD_VERSION=${{ needs.build.outputs.version }} \
+            GIT_COMMIT=${{ github.sha }}
+        # Recreated Container Apps Environment for external access
+        
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: |
+      (github.ref == 'refs/heads/production' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    environment: production
+    
+    steps:
+    - name: Log in to Azure
+      uses: azure/login@v2
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+        
+    - name: Configure ACR Access for Container Apps
+      run: |
+        # Configure registry credentials  
+        az containerapp registry set \
+          --name karage-production \
+          --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+          --server ${{ env.REGISTRY }} \
+          --username karageregistry \
+          --password $(az acr credential show --name karageregistry --query "passwords[0].value" -o tsv)
+
+    - name: Deploy to Azure Container Apps (Production)
+      run: |
+        az containerapp update \
+          --name karage-production \
+          --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.version }} \
+          --set-env-vars \
+            ASPNETCORE_ENVIRONMENT=Production \
+            BUILD_VERSION=${{ needs.build.outputs.version }} \
+            GIT_COMMIT=${{ github.sha }}
